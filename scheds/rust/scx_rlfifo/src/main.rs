@@ -95,12 +95,16 @@ use anyhow::Result;
 use bpf::*;
 use libbpf_rs::OpenObject;
 use scx_utils::UserExitInfo;
+// Reference : https://github.com/otteryc/scx/tree/linux2024/scheds/rust/scx_two_level_queue
+// use procinfo::pid::stat;
 
 // Maximum time slice (in nanoseconds) that a task can use before it is re-enqueued.
 const SLICE_NS: u64 = 5_000_000;
 
 struct Scheduler<'a> {
     bpf: BpfScheduler<'a>, // Connector to the sched_ext BPF backend
+    served_rr: u64,        // Number of RR tasks dispatched
+    served_fifo: u64,      // Number of FIFO tasks dispatched
 }
 
 impl<'a> Scheduler<'a> {
@@ -112,7 +116,12 @@ impl<'a> Scheduler<'a> {
             false, // debug (false = debug mode off)
             false, // builtin_idle (false = idle selection policy in user-space)
         )?;
-        Ok(Self { bpf })
+        // Ok(Self { bpf })
+        Ok(Self {
+            bpf,
+            served_rr: 0,
+            served_fifo: 0,
+        })
     }
 
     fn dispatch_tasks(&mut self) {
@@ -125,18 +134,23 @@ impl<'a> Scheduler<'a> {
             // Create a new task to be dispatched from the received enqueued task.
             let mut dispatched_task = DispatchedTask::new(&task);
 
-            // Decide where the task needs to run (pick a target CPU).
-            //
-            // A call to select_cpu() will return the most suitable idle CPU for the task,
-            // prioritizing its previously used CPU (task.cpu).
-            //
-            // If we can't find any idle CPU, keep the task running on the same CPU.
-            let cpu = self.bpf.select_cpu(task.pid, task.cpu, task.flags);
-            dispatched_task.cpu = if cpu >= 0 { cpu } else { task.cpu };
+            let t_weight = task.weight;
+            // println!("PID={} weight={}", task.pid, t_weight);
 
-            // Determine the task's time slice: assign value inversely proportional to the number
-            // of tasks waiting to be scheduled.
-            dispatched_task.slice_ns = SLICE_NS / (nr_waiting + 1);
+            if t_weight > 100 {
+                // Nice < 0 => Treat as FIFO
+                // limit task migration to the same CPU
+                dispatched_task.cpu = task.cpu;
+                self.served_fifo += 1;
+                dispatched_task.slice_ns = u64::MAX;
+            } else {
+                // Nice >= 0 => Treat as RR
+                self.served_rr += 1;
+                let cpu = self.bpf.select_cpu(task.pid, task.cpu, task.flags);
+                dispatched_task.cpu = if cpu >= 0 { cpu } else { task.cpu };
+                dispatched_task.slice_ns = 10_000_000; // 10ms
+                // dispatched_task.slice_ns = 10_000_000 / (nr_waiting + 1); // 10ms
+            }
 
             // Dispatch the task.
             self.bpf.dispatch_task(&dispatched_task).unwrap();
@@ -158,13 +172,15 @@ impl<'a> Scheduler<'a> {
         let nr_sched_congested = *self.bpf.nr_sched_congested_mut();
 
         println!(
-            "user={} kernel={} cancel={} bounce={} fail={} cong={}",
+            "user={} kernel={} cancel={} bounce={} fail={} cong={} served_rr={}, served_fifo={}",
             nr_user_dispatches,
             nr_kernel_dispatches,
             nr_cancel_dispatches,
             nr_bounce_dispatches,
             nr_failed_dispatches,
             nr_sched_congested,
+            self.served_rr,
+            self.served_fifo,
         );
     }
 
