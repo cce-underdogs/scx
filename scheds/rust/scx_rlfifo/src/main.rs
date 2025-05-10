@@ -148,7 +148,8 @@ impl<'a> Scheduler<'a> {
                 self.served_rr += 1;
                 let cpu = self.bpf.select_cpu(task.pid, task.cpu, task.flags);
                 dispatched_task.cpu = if cpu >= 0 { cpu } else { task.cpu };
-                dispatched_task.slice_ns = SLICE_NS / (nr_waiting + 1);
+                // dispatched_task.slice_ns = SLICE_NS / (nr_waiting + 1);
+                dispatched_task.slice_ns = 10_000_000 / (nr_waiting + 1); // 10ms
             }
 
             // Dispatch the task.
