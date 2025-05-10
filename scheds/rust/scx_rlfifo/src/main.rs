@@ -98,6 +98,9 @@ use scx_utils::UserExitInfo;
 // Reference : https://github.com/otteryc/scx/tree/linux2024/scheds/rust/scx_two_level_queue
 // use procinfo::pid::stat;
 
+pub const SCX_DSQ_FLAG_STICKY: u64 = 1 ;
+pub const SCX_TASK_STICKY: u64 = 1 ;
+
 // Maximum time slice (in nanoseconds) that a task can use before it is re-enqueued.
 const SLICE_NS: u64 = 5_000_000;
 
@@ -105,6 +108,7 @@ struct Scheduler<'a> {
     bpf: BpfScheduler<'a>, // Connector to the sched_ext BPF backend
     served_rr: u64,        // Number of RR tasks dispatched
     served_fifo: u64,      // Number of FIFO tasks dispatched
+    fifo_last_pid: i32,    // PID of the current FIFO task.
 }
 
 impl<'a> Scheduler<'a> {
@@ -121,44 +125,65 @@ impl<'a> Scheduler<'a> {
             bpf,
             served_rr: 0,
             served_fifo: 0,
+            fifo_last_pid: -1,
         })
     }
 
     fn dispatch_tasks(&mut self) {
-        // Get the amount of tasks that are waiting to be scheduled.
-        let nr_waiting = *self.bpf.nr_queued_mut();
+        let mut tasks = Vec::new();
+        let mut nr_pending = 0;
 
-        // Start consuming and dispatching tasks, until all the CPUs are busy or there are no more
-        // tasks to be dispatched.
+        // Dequeue all available tasks from the BPF scheduler and store them in a vector
         while let Ok(Some(task)) = self.bpf.dequeue_task() {
-            // Create a new task to be dispatched from the received enqueued task.
-            let mut dispatched_task = DispatchedTask::new(&task);
-
-            let t_weight = task.weight;
-            // println!("PID={} weight={}", task.pid, t_weight);
-
-            if t_weight > 100 {
-                // Nice < 0 => Treat as FIFO
-                // limit task migration to the same CPU
-                dispatched_task.cpu = task.cpu;
-                self.served_fifo += 1;
-                dispatched_task.slice_ns = u64::MAX;
-            } else {
-                // Nice >= 0 => Treat as RR
-                self.served_rr += 1;
-                let cpu = self.bpf.select_cpu(task.pid, task.cpu, task.flags);
-                dispatched_task.cpu = if cpu >= 0 { cpu } else { task.cpu };
-                dispatched_task.slice_ns = SLICE_NS / (nr_waiting + 1);
-            }
-
-            // Dispatch the task.
-            self.bpf.dispatch_task(&dispatched_task).unwrap();
+            tasks.push(task);
         }
 
-        // Notify the BPF component that tasks have been dispatched.
-        //
-        // This function will put the scheduler to sleep, until another task needs to run.
-        self.bpf.notify_complete(0);
+        // Attempt to resume the previous FIFO task if it is still alive and present in the queue
+        for task in &tasks {
+            if task.pid == self.fifo_last_pid {
+                let mut dispatched = DispatchedTask::new(task);
+                dispatched.slice_ns = 10_000_000;  // Use regular slice to avoid stall
+                dispatched.cpu = task.cpu;
+                self.bpf.dispatch_task(&dispatched).unwrap();
+                nr_pending += 1;
+                self.fifo_last_pid = task.pid; // <--- ensure it's refreshed
+                self.bpf.notify_complete(nr_pending);
+                return;
+            }
+        }
+
+        self.fifo_last_pid = -1;
+
+        // Dispatch all other tasks (either new FIFO or Round-Robin)
+        for task in tasks {
+            // Skip re-dispatching a task that was already resumed as FIFO
+            if task.pid == self.fifo_last_pid {
+                continue;
+            }
+
+            let mut dispatched = DispatchedTask::new(&task);
+            if task.weight > 100 {
+                // Treat as FIFO: non-preemptible with infinite slice
+                dispatched.slice_ns = 20_000_000;
+                self.fifo_last_pid = task.pid;
+                self.served_fifo += 1;
+                dispatched.cpu = task.cpu; // Stick to the same CPU
+                self.bpf.dispatch_task(&dispatched).unwrap();
+                nr_pending += 1;
+                continue;
+            } else {
+                // Treat as Round-Robin: fixed time slice
+                dispatched.slice_ns = 10_000_000; // 5ms time slice
+                self.served_rr += 1;
+            }
+
+            dispatched.cpu = task.cpu; // Stick to the same CPU
+            self.bpf.dispatch_task(&dispatched).unwrap();
+            nr_pending += 1;
+        }
+
+        // Notify the kernel about the number of tasks dispatched; this may block
+        self.bpf.notify_complete(nr_pending);
     }
 
     fn print_stats(&mut self) {
