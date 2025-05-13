@@ -14,6 +14,7 @@ libbpf-rs = "=0.25.0-beta.1"
 libc = "0.2.137"
 scx_utils = { path = "../../../rust/scx_utils", version = "1.0.15" }
 scx_rustland_core = { path = "../../../rust/scx_rustland_core", version = "2.2.11" }
+procinfo = "0.4.2"
 
 [build-dependencies]
 scx_utils = { path = "../../../rust/scx_utils", version = "1.0.15" }
