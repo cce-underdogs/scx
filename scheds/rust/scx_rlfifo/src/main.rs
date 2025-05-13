@@ -96,7 +96,7 @@ use bpf::*;
 use libbpf_rs::OpenObject;
 use scx_utils::UserExitInfo;
 // Reference : https://github.com/otteryc/scx/tree/linux2024/scheds/rust/scx_two_level_queue
-use procinfo::pid::stat;
+// use procinfo::pid::stat;
 
 // Maximum time slice (in nanoseconds) that a task can use before it is re-enqueued.
 const SLICE_NS: u64 = 5_000_000;
@@ -119,8 +119,8 @@ impl<'a> Scheduler<'a> {
         // Ok(Self { bpf })
         Ok(Self {
             bpf,
-            served_rr: 0, 
-            served_fifo: 0 
+            served_rr: 0,
+            served_fifo: 0,
         })
     }
 
@@ -134,32 +134,21 @@ impl<'a> Scheduler<'a> {
             // Create a new task to be dispatched from the received enqueued task.
             let mut dispatched_task = DispatchedTask::new(&task);
 
-            // Decide where the task needs to run (pick a target CPU).
-            //
-            // A call to select_cpu() will return the most suitable idle CPU for the task,
-            // prioritizing its previously used CPU (task.cpu).
-            //
-            // If we can't find any idle CPU, keep the task running on the same CPU.
-            let cpu = self.bpf.select_cpu(task.pid, task.cpu, task.flags);
-            // dispatched_task.cpu = if cpu >= 0 { cpu } else { task.cpu };
-            dispatched_task.cpu = task.cpu;
-            // Determine the task's time slice: assign value inversely proportional to the number
-            // of tasks waiting to be scheduled.
-            // dispatched_task.slice_ns = SLICE_NS / (nr_waiting + 1);
-            let nice = match stat(task.pid) {
-                Ok(info) => info.nice,
-                Err(_) => continue,
-            };
+            let t_weight = task.weight;
+            // println!("PID={} weight={}", task.pid, t_weight);
 
-            if nice < 0 {
+            if t_weight > 100 {
                 // Nice < 0 => Treat as FIFO
+                // limit task migration to the same CPU
+                dispatched_task.cpu = task.cpu;
                 self.served_fifo += 1;
                 dispatched_task.slice_ns = u64::MAX;
             } else {
                 // Nice >= 0 => Treat as RR
                 self.served_rr += 1;
+                let cpu = self.bpf.select_cpu(task.pid, task.cpu, task.flags);
+                dispatched_task.cpu = if cpu >= 0 { cpu } else { task.cpu };
                 dispatched_task.slice_ns = SLICE_NS / (nr_waiting + 1);
-                // dispatched_task.slice_ns = SLICE_NS / 50_000;
             }
 
             // Dispatch the task.
