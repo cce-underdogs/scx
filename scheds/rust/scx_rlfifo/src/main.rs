@@ -96,6 +96,8 @@ use bpf::*;
 use libbpf_rs::OpenObject;
 use scx_utils::UserExitInfo;
 
+use std::time::Instant;
+
 // Maximum time slice (in nanoseconds) that a task can use before it is re-enqueued.
 const SLICE_NS: u64 = 5_000_000;
 
@@ -122,6 +124,11 @@ impl<'a> Scheduler<'a> {
         // Start consuming and dispatching tasks, until all the CPUs are busy or there are no more
         // tasks to be dispatched.
         while let Ok(Some(task)) = self.bpf.dequeue_task() {
+            // // Print the DispatchedTask information
+            // println!(
+            //     "Dispatching task: pid={} cpu={}",
+            //     task.pid, task.cpu
+            // );
             // Create a new task to be dispatched from the received enqueued task.
             let mut dispatched_task = DispatchedTask::new(&task);
 
@@ -179,13 +186,19 @@ impl<'a> Scheduler<'a> {
         let mut prev_ts = Self::now();
 
         while !self.bpf.exited() {
+            let start = Instant::now();
+
             self.dispatch_tasks();
 
-            let curr_ts = Self::now();
-            if curr_ts > prev_ts {
-                self.print_stats();
-                prev_ts = curr_ts;
-            }
+            // Calculate the duration of the dispatch call.
+            let duration = start.elapsed();
+            println!("Dispatch call duration: {:?}", duration);
+
+            // let curr_ts = Self::now();
+            // if curr_ts > prev_ts {
+            //     self.print_stats();
+            //     prev_ts = curr_ts;
+            // }
         }
         self.bpf.shutdown_and_report()
     }
