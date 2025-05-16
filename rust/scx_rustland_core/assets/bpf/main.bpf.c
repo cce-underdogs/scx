@@ -1279,6 +1279,9 @@ s32 BPF_STRUCT_OPS_SLEEPABLE(rustland_init)
 	/* Compile-time checks */
 	BUILD_BUG_ON((MAX_CPUS % 2));
 
+	/* test bpf_printk*/
+	bpf_printk("Hello world from rustland_init");
+
 	/* Initialize rustland core */
 	err = dsq_init();
 	if (err)
