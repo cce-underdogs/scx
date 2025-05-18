@@ -98,10 +98,11 @@ use libbpf_rs::OpenObject;
 use scx_utils::UserExitInfo;
 
 // Maximum time slice (in nanoseconds) that a task can use before it is re-enqueued.
-const SLICE_NS: u64 = 5_000_000;
+// const SLICE_NS: u64 = 5_000_000;
 
 struct Scheduler<'a> {
     bpf: BpfScheduler<'a>, // Connector to the sched_ext BPF backend
+    fifo_last_pid: i32, // PID of the last task that was dispatched
 }
 
 impl<'a> Scheduler<'a> {
@@ -113,40 +114,46 @@ impl<'a> Scheduler<'a> {
             false, // debug (false = debug mode off)
             true,  // builtin_idle (true = allow BPF to use idle CPUs if available)
         )?;
-        Ok(Self { bpf })
+        Ok(Self {
+            bpf,
+            fifo_last_pid: -1, // Initialize the last dispatched PID to 0
+     })
     }
 
     fn dispatch_tasks(&mut self) {
         // Get the amount of tasks that are waiting to be scheduled.
         let nr_waiting = *self.bpf.nr_queued_mut();
 
-        // Start consuming and dispatching tasks, until all the CPUs are busy or there are no more
-        // tasks to be dispatched.
+        let mut task_vec = Vec::new();
         while let Ok(Some(task)) = self.bpf.dequeue_task() {
-            // Create a new task to be dispatched from the received enqueued task.
-            let mut dispatched_task = DispatchedTask::new(&task);
-
-            // Decide where the task needs to run (pick a target CPU).
-            //
-            // A call to select_cpu() will return the most suitable idle CPU for the task,
-            // prioritizing its previously used CPU (task.cpu).
-            //
-            // If we can't find any idle CPU, run on the first CPU available.
-            let cpu = self.bpf.select_cpu(task.pid, task.cpu, task.flags);
-            dispatched_task.cpu = if cpu >= 0 { cpu } else { RL_CPU_ANY };
-
-            // Determine the task's time slice: assign value inversely proportional to the number
-            // of tasks waiting to be scheduled.
-            dispatched_task.slice_ns = SLICE_NS / (nr_waiting + 1);
-
-            // Dispatch the task.
-            self.bpf.dispatch_task(&dispatched_task).unwrap();
+            task_vec.push(task);
         }
 
-        // Notify the BPF component that tasks have been dispatched.
-        //
-        // This function will put the scheduler to sleep, until another task needs to run.
-        self.bpf.notify_complete(0);
+        for task in &task_vec {
+            if task.pid == self.fifo_last_pid{
+                let mut dispatched_fifo = DispatchedTask::new(task);
+                dispatched_fifo.slice_ns = 10_000_000;
+                dispatched_fifo.cpu = task.cpu;
+                self.bpf.dispatch_task(&dispatched_fifo).unwrap();
+                self.bpf.notify_complete(nr_waiting - 1); // Notify that one task has been dispatched
+                return;
+
+            }
+        }
+
+        // If fifo is done
+        if let Some(task) = task_vec.first(){
+            let mut dispatched = DispatchedTask::new(task);
+            dispatched.cpu = task.cpu;
+            dispatched.slice_ns = 10_000_000; // 10ms
+            self.bpf.dispatch_task(&dispatched).unwrap();
+            self.fifo_last_pid = task.pid; // Update the last dispatched PID
+            self.bpf.notify_complete(nr_waiting -1);
+        } else {
+            self.fifo_last_pid = -1;
+            self.bpf.notify_complete(0); // Notify that no tasks have been dispatched
+        }
+
     }
 
     fn print_stats(&mut self) {
