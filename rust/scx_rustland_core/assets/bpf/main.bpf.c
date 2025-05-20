@@ -561,6 +561,10 @@ static void dispatch_task(const struct dispatched_task_ctx *task)
 	p = bpf_task_from_pid(task->pid);
 	if (!p)
 		return;
+	if(task->cpu == 13){
+		bpf_printk("dispatch: pid=%d (%s) slice=%llu\n",
+			p->pid, p->comm, task->slice_ns);
+	}
 
 	/*
 	 * Update task's time slice in its context.
@@ -795,6 +799,9 @@ void BPF_STRUCT_OPS(rustland_enqueue, struct task_struct *p, u64 enq_flags)
 	}
 	get_task_info(task, p, enq_flags);
 	dbg_msg("enqueue: pid=%d (%s)", p->pid, p->comm);
+	// if(cpu==13){
+	// 	bpf_printk("enqueue: pid=%d (%s)", p->pid, p->comm);
+	// }
 	bpf_ringbuf_submit(task, 0);
 
 	__sync_fetch_and_add(&nr_queued, 1);
