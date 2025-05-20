@@ -117,42 +117,49 @@ impl<'a> Scheduler<'a> {
         Ok(Self {
             bpf,
             fifo_last_pid: -1, // Initialize the last dispatched PID to 0
-     })
+        })
     }
 
     fn dispatch_tasks(&mut self) {
-        // Get the amount of tasks that are waiting to be scheduled.
-        let nr_waiting = *self.bpf.nr_queued_mut();
-
         let mut task_vec = Vec::new();
         while let Ok(Some(task)) = self.bpf.dequeue_task() {
             task_vec.push(task);
         }
+        // let task_vec2 = task_vec.clone();
 
+        let mut fifo_matched = false;
+        let mut cpuuuu = -1;
         for task in &task_vec {
-            if task.pid == self.fifo_last_pid{
-                let mut dispatched_fifo = DispatchedTask::new(task);
-                dispatched_fifo.slice_ns = 10_000_000;
-                dispatched_fifo.cpu = task.cpu;
-                self.bpf.dispatch_task(&dispatched_fifo).unwrap();
-                self.bpf.notify_complete(nr_waiting - 1); // Notify that one task has been dispatched
-                return;
+            let mut dispatched = DispatchedTask::new(task);
+            dispatched.cpu = task.cpu;
+            if (dispatched.pid == self.fifo_last_pid) && (task.cpu == 13){
+                dispatched.slice_ns = 50_000_000;
+                fifo_matched = true; // Mark that we have a FIFO task
+                println!("hiiiiiiiiiiii {}", dispatched.pid);
+                cpuuuu = 13 ;
+            } else if (task.cpu == 13) {
+                dispatched.slice_ns = 15_000_000;
+                cpuuuu = 13 ;
+            } else {
+                dispatched.slice_ns = 10_000_000; // 10ms time slice for other tasks
+            }
+            
+            self.bpf.dispatch_task(&dispatched).unwrap();
+        }
 
+        if (fifo_matched == false) && (cpuuuu == 13) {
+            match task_vec.first() {
+                Some(task) => {
+                    println!("new match {}", task.pid);
+                    self.fifo_last_pid = task.pid; // Update PID
+                    }
+                None => self.fifo_last_pid = -1, // Reset if no tasks are available
             }
         }
 
+
         // If fifo is done
-        if let Some(task) = task_vec.first(){
-            let mut dispatched = DispatchedTask::new(task);
-            dispatched.cpu = task.cpu;
-            dispatched.slice_ns = 10_000_000; // 10ms
-            self.bpf.dispatch_task(&dispatched).unwrap();
-            self.fifo_last_pid = task.pid; // Update the last dispatched PID
-            self.bpf.notify_complete(nr_waiting -1);
-        } else {
-            self.fifo_last_pid = -1;
-            self.bpf.notify_complete(0); // Notify that no tasks have been dispatched
-        }
+        self.bpf.notify_complete(0);
 
     }
 
@@ -164,15 +171,17 @@ impl<'a> Scheduler<'a> {
         let nr_bounce_dispatches = *self.bpf.nr_bounce_dispatches_mut();
         let nr_failed_dispatches = *self.bpf.nr_failed_dispatches_mut();
         let nr_sched_congested = *self.bpf.nr_sched_congested_mut();
+        let pid = self.fifo_last_pid;
 
         println!(
-            "user={} kernel={} cancel={} bounce={} fail={} cong={}",
+            "user={} kernel={} cancel={} bounce={} fail={} cong={} pid={}",
             nr_user_dispatches,
             nr_kernel_dispatches,
             nr_cancel_dispatches,
             nr_bounce_dispatches,
             nr_failed_dispatches,
             nr_sched_congested,
+            pid,
         );
     }
 
@@ -223,12 +232,12 @@ fn main() -> Result<()> {
 
     // Initialize and load the FIFO scheduler.
     let mut open_object = MaybeUninit::uninit();
+    let mut sched = Scheduler::init(&mut open_object)?;
     loop {
-        let mut sched = Scheduler::init(&mut open_object)?;
         if !sched.run()?.should_restart() {
             break;
         }
     }
-
+    println!("Helpppppppppppppppppppppppppppppppppppppppppppppppppppppp");
     Ok(())
 }
