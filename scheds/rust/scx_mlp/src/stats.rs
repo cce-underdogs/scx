@@ -1,10 +1,14 @@
 use std::collections::BTreeMap;
+use std::fs::OpenOptions;
 use std::io::Write;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::thread::ThreadId;
 use std::time::Duration;
+
+use anyhow::Ok;
+use csv::Writer;
 
 use anyhow::bail;
 use anyhow::Result;
@@ -371,6 +375,19 @@ pub fn monitor(intv: Duration, shutdown: Arc<AtomicBool>) -> Result<()> {
         &vec![],
         intv,
         || shutdown.load(Ordering::Relaxed),
-        |sysstats| sysstats.format(&mut std::io::stdout()),
+        |sysstats| {
+            sysstats.format(&mut std::io::stdout())?;
+
+            let file = OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open("sysstats.csv")?;
+            let mut wtr = Writer::from_writer(file);
+
+            wtr.serialize(sysstats)?;
+            wtr.flush()?;
+
+            Ok(())
+        },
     )
 }

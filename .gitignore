@@ -6,3 +6,4 @@ target
 .cache/
 .vscode/
 tags
+sysstats.csv
