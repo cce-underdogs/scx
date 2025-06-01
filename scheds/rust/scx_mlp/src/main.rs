@@ -64,6 +64,7 @@ use stats::SchedSamples;
 use stats::StatsReq;
 use stats::StatsRes;
 use stats::SysStats;
+use ml::add;
 
 /// scx_lavd: Latency-criticality Aware Virtual Deadline (LAVD) scheduler
 ///
@@ -1079,6 +1080,8 @@ fn main() -> Result<()> {
             return Ok(());
         }
     }
+
+    println!("Test ml dependency: 2 + 3 = {}", add(2, 3));
 
     let mut open_object = MaybeUninit::uninit();
     loop {

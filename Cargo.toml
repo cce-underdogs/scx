@@ -21,6 +21,7 @@ members = [
     "tools/scxctl",
     "tools/scxtop",
     "tools/vmlinux_docify",
+    "ml",
 ]
 resolver = "2"
 
