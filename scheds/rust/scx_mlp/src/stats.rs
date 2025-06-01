@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
-use std::fs::OpenOptions;
-use std::io::Write;
+use std::fs::{metadata, OpenOptions};
+use std::io::{BufWriter, Write};
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -8,7 +8,7 @@ use std::thread::ThreadId;
 use std::time::Duration;
 
 use anyhow::Ok;
-use csv::Writer;
+use csv::WriterBuilder;
 
 use anyhow::bail;
 use anyhow::Result;
@@ -378,12 +378,37 @@ pub fn monitor(intv: Duration, shutdown: Arc<AtomicBool>) -> Result<()> {
         |sysstats| {
             sysstats.format(&mut std::io::stdout())?;
 
-            let file = OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open("sysstats.csv")?;
-            let mut wtr = Writer::from_writer(file);
+            let path = "sysstats.csv";
 
+            let file = OpenOptions::new().create(true).append(true).open(path)?;
+
+            let is_empty = metadata(path)?.len() == 0;
+            let mut wtr = WriterBuilder::new()
+                .has_headers(false) 
+                .from_writer(BufWriter::new(file));
+
+            if is_empty {
+                wtr.write_record(&[
+                    "mseq",
+                    "nr_queued_task",
+                    "nr_active",
+                    "nr_sched",
+                    "nr_preempt",
+                    "pc_pc",
+                    "pc_lc",
+                    "pc_x_migration",
+                    "nr_stealee",
+                    "pc_big",
+                    "pc_pc_on_big",
+                    "pc_lc_on_big",
+                    "power_mode",
+                    "pc_performance",
+                    "pc_balanced",
+                    "pc_powersave",
+                ])?;
+            }
+
+            // 寫入實際資料
             wtr.serialize(sysstats)?;
             wtr.flush()?;
 
