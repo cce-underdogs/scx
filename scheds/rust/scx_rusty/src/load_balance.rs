@@ -956,7 +956,8 @@ impl<'a, 'b> LoadBalancer<'a, 'b> {
             return Ok(());
         }
 
-        debug!("Intra node {} LB started", node.id);
+        trace!("---> node.domain.len = {}", node.domains.len());
+        trace!("Intra node {} LB started", node.id);
 
         // See the comment in balance_between_nodes() for the purpose of these
         // lists. Everything is roughly the same here as in that comment block,
