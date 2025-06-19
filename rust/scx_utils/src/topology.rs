@@ -174,11 +174,18 @@ pub struct Llc {
     pub all_cpus: BTreeMap<usize, Arc<Cpu>>,
 }
 
+#[derive(Debug)]
+pub struct L2Cache {
+    pub id: usize,
+    pub span: Cpumask,
+}
+
 #[derive(Debug, Clone)]
 pub struct Node {
     pub id: usize,
     pub distance: Vec<usize>,
     pub llcs: BTreeMap<usize, Arc<Llc>>,
+    pub l2cs: BTreeMap<usize, Arc<L2Cache>>,
     /// Cpumask of all CPUs in this node.
     pub span: Cpumask,
 
@@ -344,6 +351,8 @@ struct TopoCtx {
     /// Mapping of NUMA node LLC ids
     node_llc_kernel_ids: BTreeMap<(usize, usize, usize), usize>,
     /// Mapping of L2 ids
+    pub node_l2_kernel_ids: BTreeMap<(usize, usize, usize), usize>, // (node_id, package_id, l2_kernel_id)
+    /// Mapping of L2 ids
     l2_ids: BTreeMap<String, usize>,
     /// Mapping of L3 ids
     l3_ids: BTreeMap<String, usize>,
@@ -358,6 +367,7 @@ impl TopoCtx {
         TopoCtx {
             node_core_kernel_ids: core_kernel_ids,
             node_llc_kernel_ids: llc_kernel_ids,
+            node_l2_kernel_ids: BTreeMap::new(),
             l2_ids,
             l3_ids,
         }
@@ -463,6 +473,19 @@ fn create_insert_cpu(
     } else {
         l3_id
     };
+
+    let num_l2cs = topo_ctx.node_l2_kernel_ids.len();
+    let l2_id_in_node = topo_ctx
+        .node_l2_kernel_ids
+        .entry((node.id, package_id, l2_id))
+        .or_insert(num_l2cs);
+
+    let l2 = node.l2cs.entry(*l2_id_in_node).or_insert(Arc::new(L2Cache {
+        id: *l2_id_in_node,
+        span: Cpumask::new(),
+    }));
+    let l2_mut = Arc::get_mut(l2).unwrap();
+    l2_mut.span.set_cpu(id)?;
 
     // Per-CPU cache size
     let cache_size = get_per_cpu_cache_size(&cache_path).unwrap_or(0_usize);
@@ -704,6 +727,7 @@ fn create_default_node(
         id: 0,
         distance: vec![],
         llcs: BTreeMap::new(),
+        l2cs: BTreeMap::new(),
         span: Cpumask::new(),
         #[cfg(feature = "gpu-topology")]
         gpus: BTreeMap::new(),
@@ -777,6 +801,7 @@ fn create_numa_nodes(
             id: node_id,
             distance,
             llcs: BTreeMap::new(),
+            l2cs: BTreeMap::new(),
             span: Cpumask::new(),
 
             all_cores: BTreeMap::new(),
