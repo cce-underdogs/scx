@@ -155,6 +155,7 @@ use crate::types::task_ctx;
 use crate::DomainGroup;
 
 use std::fs::File;
+use std::fs::OpenOptions;
 use std::io::BufWriter;
 use std::io::Write;
 
@@ -486,7 +487,12 @@ impl<'a, 'b> LoadBalancer<'a, 'b> {
         export_ml_data: bool,
     ) -> std::io::Result<Self> {
         let ml_data_file = if export_ml_data {
-            let mut f = BufWriter::new(File::create("task_data.csv")?);
+            let mut f = BufWriter::new(
+                OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open("task_data.csv")?,
+            );
             writeln!(
                 f,
                 "task_id,dom_id,load,dom_mask,preferred_dom_mask,\
