@@ -151,6 +151,7 @@ use crate::bpf_intf;
 use crate::bpf_skel::*;
 use crate::stats::DomainStats;
 use crate::stats::NodeStats;
+use crate::types::task_ctx;
 use crate::DomainGroup;
 
 use std::fs::File;
@@ -488,7 +489,9 @@ impl<'a, 'b> LoadBalancer<'a, 'b> {
             let mut f = BufWriter::new(File::create("task_data.csv")?);
             writeln!(
                 f,
-                "task_id,dom_id,load,is_kworker,migrated,dom_mask,can_migrate"
+                "task_id,dom_id,load,dom_mask,preferred_dom_mask,\
+                migrated,is_kworker,weight,sum_runtime,avg_runtime,\
+                blocked_freq,waker_freq,dispatch_local,can_migrate"
             )?;
             Some(f)
         } else {
@@ -741,7 +744,7 @@ impl<'a, 'b> LoadBalancer<'a, 'b> {
             .into_iter()
             .map(|task| {
                 let pull_dom_id = pull_dom_id;
-                let change_migrate = task.dom_mask & (1 << pull_dom_id) != 0
+                let can_migrate = task.dom_mask & (1 << pull_dom_id) != 0
                     && !(self.skip_kworkers && task.is_kworker)
                     && !task.migrated.get()
                     && task_filter(&task, pull_dom_id);
@@ -751,14 +754,21 @@ impl<'a, 'b> LoadBalancer<'a, 'b> {
                         let taskc = unsafe { &*task.taskc_p };
                         let _ = writeln!(
                             writer,
-                            "{},{},{},{},{},{},{}",
+                            "{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
                             taskc.pid,
                             push_dom.id,
                             task.load,
-                            task.is_kworker,
-                            task.migrated.get(),
                             task.dom_mask,
-                            change_migrate as u8
+                            task.preferred_dom_mask,
+                            task.migrated.get(),
+                            task.is_kworker,
+                            taskc.weight,
+                            taskc.sum_runtime,
+                            taskc.avg_runtime,
+                            taskc.blocked_freq,
+                            taskc.waker_freq,
+                            unsafe { taskc.dispatch_local.assume_init() },
+                            can_migrate as u8
                         );
                     }
                 }
