@@ -151,7 +151,12 @@ use crate::bpf_intf;
 use crate::bpf_skel::*;
 use crate::stats::DomainStats;
 use crate::stats::NodeStats;
+use crate::types::task_ctx;
 use crate::DomainGroup;
+
+use std::fs::File;
+use std::io::BufWriter;
+use std::io::Write;
 
 const DEFAULT_WEIGHT: f64 = bpf_intf::consts_LB_DEFAULT_WEIGHT as f64;
 const RAVG_FRAC_BITS: u32 = bpf_intf::ravg_consts_RAVG_FRAC_BITS;
@@ -460,6 +465,8 @@ pub struct LoadBalancer<'a, 'b> {
 
     lb_apply_weight: bool,
     balance_load: bool,
+    export_ml_data: bool,
+    ml_data_file: Option<BufWriter<File>>,
 }
 
 // Verify that the number of buckets is a factor of the maximum weight to
@@ -476,8 +483,22 @@ impl<'a, 'b> LoadBalancer<'a, 'b> {
         skip_kworkers: bool,
         lb_apply_weight: bool,
         balance_load: bool,
-    ) -> Self {
-        Self {
+        export_ml_data: bool,
+    ) -> std::io::Result<Self> {
+        let ml_data_file = if export_ml_data {
+            let mut f = BufWriter::new(File::create("task_data.csv")?);
+            writeln!(
+                f,
+                "task_id,dom_id,load,dom_mask,preferred_dom_mask,\
+                migrated,is_kworker,weight,sum_runtime,avg_runtime,\
+                blocked_freq,waker_freq,dispatch_local,can_migrate"
+            )?;
+            Some(f)
+        } else {
+            None
+        };
+
+        Ok(Self {
             skel,
             skip_kworkers,
 
@@ -489,12 +510,12 @@ impl<'a, 'b> LoadBalancer<'a, 'b> {
             balance_load,
 
             dom_group,
-        }
+
+            export_ml_data,
+            ml_data_file,
+        })
     }
 
-    /// Perform load balancing calculations. When load balancing is enabled,
-    /// also perform rebalances between NUMA nodes (when running on a
-    /// multi-socket host) and domains.
     pub fn load_balance(&mut self) -> Result<()> {
         self.create_domain_hierarchy()?;
 
@@ -502,6 +523,9 @@ impl<'a, 'b> LoadBalancer<'a, 'b> {
             self.perform_balancing()?
         }
 
+        if let Some(writer) = self.ml_data_file.as_mut() {
+            let _ = writer.flush();
+        }
         Ok(())
     }
 
@@ -718,6 +742,38 @@ impl<'a, 'b> LoadBalancer<'a, 'b> {
         let tasks: Vec<TaskInfo> = std::mem::take(&mut push_dom.tasks)
             .into_vec()
             .into_iter()
+            .map(|task| {
+                let pull_dom_id = pull_dom_id;
+                let can_migrate = task.dom_mask & (1 << pull_dom_id) != 0
+                    && !(self.skip_kworkers && task.is_kworker)
+                    && !task.migrated.get()
+                    && task_filter(&task, pull_dom_id);
+
+                if self.export_ml_data {
+                    if let Some(writer) = self.ml_data_file.as_mut() {
+                        let taskc = unsafe { &*task.taskc_p };
+                        let _ = writeln!(
+                            writer,
+                            "{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+                            taskc.pid,
+                            push_dom.id,
+                            task.load,
+                            task.dom_mask,
+                            task.preferred_dom_mask,
+                            task.migrated.get(),
+                            task.is_kworker,
+                            taskc.weight,
+                            taskc.sum_runtime,
+                            taskc.avg_runtime,
+                            taskc.blocked_freq,
+                            taskc.waker_freq,
+                            unsafe { taskc.dispatch_local.assume_init() },
+                            can_migrate as u8
+                        );
+                    }
+                }
+                task
+            })
             .filter(|task| {
                 task.dom_mask & (1 << pull_dom_id) != 0
                     && !(self.skip_kworkers && task.is_kworker)
