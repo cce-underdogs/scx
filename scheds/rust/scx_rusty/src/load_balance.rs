@@ -498,9 +498,9 @@ impl<'a, 'b> LoadBalancer<'a, 'b> {
             if !file_exists {
                 writeln!(
                     f,
-                    "task_id,dom_id,load,dom_mask,preferred_dom_mask,\
-                    migrated,is_kworker,weight,sum_runtime,avg_runtime,\
-                    blocked_freq,waker_freq,dispatch_local,can_migrate"
+                    "task_id,dom_id,task_load,blocked_freq,waker_freq,\
+                    push_load_sum,pull_load_sum,push_load_delta,pull_load_delta,\
+                    push_state,pull_state,can_migrate"
                 )?;
             }
             Some(f)
@@ -755,7 +755,7 @@ impl<'a, 'b> LoadBalancer<'a, 'b> {
             .filter(|task| {
                 task.dom_mask & (1 << pull_dom_id) != 0
                     && !(self.skip_kworkers && task.is_kworker)
-                    && !task.migrated.get()
+                    && !task.migrated.get() 
             })
             .collect();
 
@@ -799,20 +799,18 @@ impl<'a, 'b> LoadBalancer<'a, 'b> {
                     let taskc = unsafe { &*task.taskc_p };
                     let _ = writeln!(
                         writer,
-                        "{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+                        "{},{},{},{},{},{},{},{},{},{},{},{}",
                         taskc.pid,
                         push_dom.id,
                         task.load,
-                        task.dom_mask,
-                        task.preferred_dom_mask,
-                        task.migrated.get(),
-                        task.is_kworker,
-                        taskc.weight,
-                        taskc.sum_runtime,
-                        taskc.avg_runtime,
                         taskc.blocked_freq,
                         taskc.waker_freq,
-                        unsafe { taskc.dispatch_local.assume_init() },
+                        push_dom.load.load_sum() as f64,
+                        pull_dom.load.load_sum() as f64,
+                        push_dom.load.load_delta as f64,
+                        pull_dom.load.load_delta as f64,
+                        push_dom.load.state() as u8,
+                        pull_dom.load.state() as u8,
                         0 as u8, // can_not_migrate
                     );
                 }
@@ -829,21 +827,19 @@ impl<'a, 'b> LoadBalancer<'a, 'b> {
                 let taskc = unsafe { &*task.taskc_p };
                 let _ = writeln!(
                     writer,
-                    "{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+                    "{},{},{},{},{},{},{},{},{},{},{},{}",
                     taskc.pid,
                     push_dom.id,
                     task.load,
-                    task.dom_mask,
-                    task.preferred_dom_mask,
-                    task.migrated.get(),
-                    task.is_kworker,
-                    taskc.weight,
-                    taskc.sum_runtime,
-                    taskc.avg_runtime,
                     taskc.blocked_freq,
                     taskc.waker_freq,
-                    unsafe { taskc.dispatch_local.assume_init() },
-                    1 as u8, // can_migrate
+                    push_dom.load.load_sum() as f64,
+                    pull_dom.load.load_sum() as f64,
+                    push_dom.load.load_delta as f64,
+                    pull_dom.load.load_delta as f64,
+                    push_dom.load.state() as u8,
+                    pull_dom.load.state() as u8,
+                    1 as u8, // can_not_migrate
                 );
             }
         }
