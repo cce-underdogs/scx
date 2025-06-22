@@ -29,6 +29,12 @@ use std::time::UNIX_EPOCH;
 use stats::ClusterStats;
 use stats::NodeStats;
 
+mod model;
+use model::ResNetModel;
+
+mod predict;
+use predict::Predictor;
+
 #[macro_use]
 extern crate static_assertions;
 
