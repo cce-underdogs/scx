@@ -729,16 +729,24 @@ impl<'a, 'b> LoadBalancer<'a, 'b> {
             .into_vec()
             .into_iter()
             .filter(|task| {
+                let taskc = unsafe { &*task.taskc_p };
+                let input_raw = vec![
+                    task.load.0 as f32,
+                    taskc.blocked_freq as f32,
+                    taskc.waker_freq as f32,
+                    taskc.weight as f32,
+                    taskc.deadline as f32,
+                    taskc.avg_runtime as f32,
+                ];
+                let prediction_ok = self.predictor.predict(&input_raw).unwrap_or(false);
+                
                 task.dom_mask & (1 << pull_dom_id) != 0
                     && !(self.skip_kworkers && task.is_kworker)
                     && !task.migrated.get()
+                    && prediction_ok
             })
             .collect();
 
-        let input = vec![43.7606f32, 2f32, 4f32, 100f32, 2997341918f32, 104273706f32];
-        let (class, prob) = self.predictor.predict(&input)?;
-        debug!("Predicted class: {}", class);
-        debug!("Predicted prob: {}", prob);
 
         let (task, new_imbal) = match (
             Self::find_first_candidate(

@@ -55,15 +55,14 @@ impl Predictor {
         })
     }
 
-    pub fn predict(&self, input_raw: &[f32]) -> Result<(u32, f32)> {
+    pub fn predict(&self, input_raw: &[f32]) -> Result<bool> {
         let input_norm = Self::normalize_input(input_raw.to_vec(), &self.norm.min, &self.norm.max);
         let input = Tensor::from_vec(input_norm, (1, INPUT_DIM), &self.device)?;
         let logits = self.model.forward(&input)?;
         let prob = sigmoid(&logits)?;
-        let predicted = prob.ge(0.5)?.to_dtype(DType::U32)?;
+        let predicted = prob.ge(0.72)?.to_dtype(DType::U32)?;
 
         let class = predicted.squeeze(0)?.squeeze(0)?.to_scalar::<u32>()?;
-        let confidence = prob.squeeze(0)?.squeeze(0)?.to_scalar::<f32>()?;
-        Ok((class, confidence))
+        Ok(class == 1)
     }
 }
