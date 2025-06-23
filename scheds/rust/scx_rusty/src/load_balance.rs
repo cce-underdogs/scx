@@ -483,8 +483,8 @@ impl<'a, 'b> LoadBalancer<'a, 'b> {
         balance_load: bool,
     ) -> std::io::Result<Self> {
         let predictor = Predictor::new(
-            "/home/eric-wcnlab/underdog/rust_ml/model.safetensors",
-            "/home/eric-wcnlab/underdog/rust_ml/norm.json",
+            "/home/eric-wcnlab/underdog/rust_ml/model_1.safetensors",
+            "/home/eric-wcnlab/underdog/rust_ml/norm_1.json",
         )
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
 
@@ -739,15 +739,14 @@ impl<'a, 'b> LoadBalancer<'a, 'b> {
                     taskc.avg_runtime as f32,
                 ];
                 let prediction_ok = self.predictor.predict(&input_raw).unwrap_or(false);
-                
+
                 task.dom_mask & (1 << pull_dom_id) != 0
                     && !(self.skip_kworkers && task.is_kworker)
                     && !task.migrated.get()
+                    && task.load.0 > 0.0f64
                     && prediction_ok
             })
             .collect();
-
-
         let (task, new_imbal) = match (
             Self::find_first_candidate(
                 tasks
