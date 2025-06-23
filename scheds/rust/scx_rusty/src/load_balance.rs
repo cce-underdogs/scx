@@ -498,9 +498,7 @@ impl<'a, 'b> LoadBalancer<'a, 'b> {
             if !file_exists {
                 writeln!(
                     f,
-                    "task_id,dom_id,task_load,blocked_freq,waker_freq,\
-                    push_load_sum,pull_load_sum,push_load_delta,pull_load_delta,\
-                    push_state,pull_state,can_migrate"
+                    "task_id,task_load,blocked_freq,waker_freq,task_weight,deadline,avg_runtime,can_migrate"
                 )?;
             }
             Some(f)
@@ -755,7 +753,7 @@ impl<'a, 'b> LoadBalancer<'a, 'b> {
             .filter(|task| {
                 task.dom_mask & (1 << pull_dom_id) != 0
                     && !(self.skip_kworkers && task.is_kworker)
-                    && !task.migrated.get() 
+                    && !task.migrated.get()
             })
             .collect();
 
@@ -799,18 +797,14 @@ impl<'a, 'b> LoadBalancer<'a, 'b> {
                     let taskc = unsafe { &*task.taskc_p };
                     let _ = writeln!(
                         writer,
-                        "{},{},{},{},{},{},{},{},{},{},{},{}",
+                        "{},{},{},{},{},{},{},{}",
                         taskc.pid,
-                        push_dom.id,
                         task.load,
                         taskc.blocked_freq,
                         taskc.waker_freq,
-                        push_dom.load.load_sum() as f64,
-                        pull_dom.load.load_sum() as f64,
-                        push_dom.load.load_delta as f64,
-                        pull_dom.load.load_delta as f64,
-                        push_dom.load.state() as u8,
-                        pull_dom.load.state() as u8,
+                        taskc.weight as f32,
+                        taskc.deadline as u64,
+                        taskc.avg_runtime as u64,
                         0 as u8, // can_not_migrate
                     );
                 }
@@ -827,18 +821,14 @@ impl<'a, 'b> LoadBalancer<'a, 'b> {
                 let taskc = unsafe { &*task.taskc_p };
                 let _ = writeln!(
                     writer,
-                    "{},{},{},{},{},{},{},{},{},{},{},{}",
+                    "{},{},{},{},{},{},{},{}",
                     taskc.pid,
-                    push_dom.id,
                     task.load,
                     taskc.blocked_freq,
                     taskc.waker_freq,
-                    push_dom.load.load_sum() as f64,
-                    pull_dom.load.load_sum() as f64,
-                    push_dom.load.load_delta as f64,
-                    pull_dom.load.load_delta as f64,
-                    push_dom.load.state() as u8,
-                    pull_dom.load.state() as u8,
+                    taskc.weight as f32,
+                    taskc.deadline as u64,
+                    taskc.avg_runtime as u64,
                     1 as u8, // can_not_migrate
                 );
             }
