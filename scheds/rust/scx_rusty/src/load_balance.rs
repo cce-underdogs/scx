@@ -139,13 +139,13 @@ use std::sync::Arc;
 
 use anyhow::bail;
 use anyhow::Result;
-use candle_core::NdArray;
 use log::debug;
 use log::trace;
 use ordered_float::OrderedFloat;
 use scx_utils::ravg::ravg_read;
 use scx_utils::LoadAggregator;
 use scx_utils::LoadLedger;
+use serde::de;
 use sorted_vec::SortedVec;
 
 use crate::bpf_intf;
@@ -153,13 +153,7 @@ use crate::bpf_skel::*;
 use crate::predict;
 use crate::stats::DomainStats;
 use crate::stats::NodeStats;
-use crate::types::task_ctx;
 use crate::DomainGroup;
-
-use std::fs::File;
-use std::fs::OpenOptions;
-use std::io::BufWriter;
-use std::io::Write;
 
 use crate::predict::Predictor;
 
@@ -470,8 +464,6 @@ pub struct LoadBalancer<'a, 'b> {
 
     lb_apply_weight: bool,
     balance_load: bool,
-    export_ml_data: bool,
-    ml_data_file: Option<BufWriter<File>>,
     predictor: Predictor,
 }
 
@@ -489,28 +481,10 @@ impl<'a, 'b> LoadBalancer<'a, 'b> {
         skip_kworkers: bool,
         lb_apply_weight: bool,
         balance_load: bool,
-        export_ml_data: bool,
     ) -> std::io::Result<Self> {
-        let ml_data_file = if export_ml_data {
-            let mut f = BufWriter::new(
-                OpenOptions::new()
-                    .create(true)
-                    .append(true)
-                    .open("task_data.csv")?,
-            );
-            writeln!(
-                f,
-                "task_id,dom_id,load,dom_mask,preferred_dom_mask,\
-                migrated,is_kworker,weight,sum_runtime,avg_runtime,\
-                blocked_freq,waker_freq,dispatch_local,can_migrate"
-            )?;
-            Some(f)
-        } else {
-            None
-        };
-
         let predictor = Predictor::new(
-            "/home/eric-wcnlab/underdog/scx/scheds/rust/scx_rusty/src/model.safetensors",
+            "/home/eric-wcnlab/underdog/rust_ml/model.safetensors",
+            "/home/eric-wcnlab/underdog/rust_ml/norm.json",
         )
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
 
@@ -527,8 +501,6 @@ impl<'a, 'b> LoadBalancer<'a, 'b> {
 
             dom_group,
 
-            export_ml_data,
-            ml_data_file,
             predictor,
         })
     }
@@ -540,9 +512,6 @@ impl<'a, 'b> LoadBalancer<'a, 'b> {
             self.perform_balancing()?
         }
 
-        if let Some(writer) = self.ml_data_file.as_mut() {
-            let _ = writer.flush();
-        }
         Ok(())
     }
 
@@ -766,9 +735,10 @@ impl<'a, 'b> LoadBalancer<'a, 'b> {
             })
             .collect();
 
-        let input = vec![100.0, 0.0, 3.0];
-        let (class, _) = self.predictor.predict(&input)?;
+        let input = vec![43.7606f32, 2f32, 4f32, 100f32, 2997341918f32, 104273706f32];
+        let (class, prob) = self.predictor.predict(&input)?;
         debug!("Predicted class: {}", class);
+        debug!("Predicted prob: {}", prob);
 
         let (task, new_imbal) = match (
             Self::find_first_candidate(
@@ -805,29 +775,6 @@ impl<'a, 'b> LoadBalancer<'a, 'b> {
         // to do for this pair.
         let old_imbal = to_push + to_pull;
         if old_imbal < new_imbal {
-            if self.export_ml_data {
-                if let Some(writer) = self.ml_data_file.as_mut() {
-                    let taskc = unsafe { &*task.taskc_p };
-                    let _ = writeln!(
-                        writer,
-                        "{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
-                        taskc.pid,
-                        push_dom.id,
-                        task.load,
-                        task.dom_mask,
-                        task.preferred_dom_mask,
-                        task.migrated.get(),
-                        task.is_kworker,
-                        taskc.weight,
-                        taskc.sum_runtime,
-                        taskc.avg_runtime,
-                        taskc.blocked_freq,
-                        taskc.waker_freq,
-                        unsafe { taskc.dispatch_local.assume_init() },
-                        0 as u8, // can_not_migrate
-                    );
-                }
-            }
             std::mem::swap(&mut push_dom.tasks, &mut SortedVec::from_unsorted(tasks));
             return Ok(None);
         }
@@ -835,29 +782,7 @@ impl<'a, 'b> LoadBalancer<'a, 'b> {
         let load = *(task.load);
         let taskc_p = task.taskc_p;
         task.migrated.set(true);
-        if self.export_ml_data {
-            if let Some(writer) = self.ml_data_file.as_mut() {
-                let taskc = unsafe { &*task.taskc_p };
-                let _ = writeln!(
-                    writer,
-                    "{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
-                    taskc.pid,
-                    push_dom.id,
-                    task.load,
-                    task.dom_mask,
-                    task.preferred_dom_mask,
-                    task.migrated.get(),
-                    task.is_kworker,
-                    taskc.weight,
-                    taskc.sum_runtime,
-                    taskc.avg_runtime,
-                    taskc.blocked_freq,
-                    taskc.waker_freq,
-                    unsafe { taskc.dispatch_local.assume_init() },
-                    1 as u8, // can_migrate
-                );
-            }
-        }
+
         std::mem::swap(&mut push_dom.tasks, &mut SortedVec::from_unsorted(tasks));
 
         push_dom.transfer_load(load, unsafe { &mut *taskc_p }, pull_dom);
