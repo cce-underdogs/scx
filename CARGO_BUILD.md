@@ -91,6 +91,7 @@ cargo build --profile=release-tiny -p scx_flash
 | `scx_rusty`    | `cargo build --release -p scx_rusty` |
 | `scx_tickless` | `cargo build --release -p scx_tickless` |
 | `scx_wd40`     | `cargo build --release -p scx_wd40` |
+| `scx_wifi`     | `cargo build --release -p scx_wifi` |
 
 ---
 
