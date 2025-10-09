@@ -17,7 +17,6 @@ use std::mem::MaybeUninit;
 use std::time::Duration;
 use std::time::SystemTime;
 
-use anyhow::Result;
 use clap::Parser;
 use libbpf_rs::OpenObject;
 use log::info;
@@ -28,6 +27,102 @@ use scx_utils::build_id;
 use scx_utils::libbpf_clap_opts::LibbpfOpts;
 use scx_utils::UserExitInfo;
 use stats::Metrics;
+use std::sync::Arc;
+use std::sync::Mutex;
+
+use anyhow::{anyhow, Result};
+use futures_util::stream::TryStreamExt;
+use rtnetlink::packet_route::link::LinkAttribute;
+/// Wifi monitor
+use rtnetlink::Handle;
+use tokio::time::{self, Duration as TokioDuration};
+
+type NetlinkHandle = Handle;
+const INTERFACE_NAME: &str = "enp153s0";
+
+#[derive(Debug, Default)]
+pub struct NetStats {
+    pub rx_dropped: u64,
+    pub tx_errors: u64,
+}
+
+pub async fn get_net_stats(handle: &Handle) -> Result<NetStats> {
+    let mut links = handle
+        .link()
+        .get()
+        .match_name(INTERFACE_NAME.to_string())
+        .execute();
+
+    let link = links
+        .try_next()
+        .await?
+        .ok_or_else(|| anyhow!("No such network interface: {}", INTERFACE_NAME))?;
+
+    let mut stats = NetStats::default();
+
+    for nla in link.attributes.into_iter() {
+        if let LinkAttribute::Stats(s) = nla {
+            stats.rx_dropped = s.rx_dropped as u64;
+            stats.tx_errors = s.tx_errors as u64;
+            return Ok(stats);
+        }
+        if let LinkAttribute::Stats64(s) = nla {
+            stats.rx_dropped = s.rx_dropped;
+            stats.tx_errors = s.tx_errors;
+            return Ok(stats);
+        }
+    }
+
+    Err(anyhow!(
+        "Could not find valid network statistics (Stats/Stats64) for {}",
+        INTERFACE_NAME
+    ))
+}
+
+fn calculate_congestion_score(stats: &NetStats, prev_stats: &NetStats) -> u32 {
+    let dropped_delta = stats.rx_dropped.saturating_sub(prev_stats.rx_dropped);
+    let errors_delta = stats.tx_errors.saturating_sub(prev_stats.tx_errors);
+
+    let total_delta = dropped_delta + errors_delta;
+
+    (total_delta.min(500) as f64 / 500.0 * 100.0).round() as u32
+}
+
+fn net_monitor_thread(congestion_arc: Arc<Mutex<u32>>, netlink_handle: NetlinkHandle) {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("Failed to create Tokio runtime for net monitor");
+
+    rt.block_on(async {
+        let mut interval = time::interval(TokioDuration::from_millis(500));
+        let mut prev_stats = NetStats::default();
+
+        if let Ok(initial_stats) = get_net_stats(&netlink_handle).await {
+            prev_stats = initial_stats;
+        }
+
+        loop {
+            interval.tick().await;
+
+            match get_net_stats(&netlink_handle).await {
+                Ok(current_stats) => {
+                    let score = calculate_congestion_score(&current_stats, &prev_stats);
+
+                    *congestion_arc.lock().unwrap() = score;
+
+                    info!("[Net Monitor] Score: {}", score);
+
+                    prev_stats = current_stats;
+                }
+                Err(e) => {
+                    warn!("Netlink error: {}", e);
+                    *congestion_arc.lock().unwrap() = 0;
+                }
+            }
+        }
+    });
+}
 
 const SCHEDULER_NAME: &str = "RustLand";
 
@@ -157,10 +252,17 @@ struct Scheduler<'a> {
     init_page_faults: u64, // Initial page faults counter
     slice_ns: u64,         // Default time slice (in ns)
     slice_ns_min: u64,     // Minimum time slice (in ns)
+
+    // Network congestion monitoring
+    congestion_score: Arc<Mutex<u32>>, // Shared congestion score
 }
 
 impl<'a> Scheduler<'a> {
-    fn init(opts: &'a Opts, open_object: &'a mut MaybeUninit<OpenObject>) -> Result<Self> {
+    fn init(
+        opts: &'a Opts,
+        open_object: &'a mut MaybeUninit<OpenObject>,
+        congestion_arc: Arc<Mutex<u32>>,
+    ) -> Result<Self> {
         let stats_server = StatsServer::new(stats::server_data()).launch()?;
 
         // Low-level BPF connector.
@@ -191,6 +293,7 @@ impl<'a> Scheduler<'a> {
             init_page_faults: 0,
             slice_ns: opts.slice_us * NSEC_PER_USEC,
             slice_ns_min: opts.slice_us_min * NSEC_PER_USEC,
+            congestion_score: congestion_arc,
         })
     }
 
@@ -377,6 +480,9 @@ impl<'a> Scheduler<'a> {
         let (res_ch, req_ch) = self.stats_server.channels();
 
         while !self.bpf.exited() {
+            let congestion_score = *self.congestion_score.lock().unwrap();
+
+            println!("[Main] Current Congestion Score: {}", congestion_score);
             // Call the main scheduler body.
             self.schedule();
 
@@ -399,6 +505,29 @@ impl Drop for Scheduler<'_> {
 
 fn main() -> Result<()> {
     let opts = Opts::parse();
+
+    // Initialize congestion score shared state
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?;
+
+    let rt_handle = rt.handle().clone();
+
+    let (conn, netlink_handle, _) = {
+        let _guard = rt_handle.enter();
+        rtnetlink::new_connection()?
+    };
+
+    rt.spawn(conn);
+
+    let congestion_score = Arc::new(Mutex::new(0u32));
+
+    let congestion_monitor = congestion_score.clone();
+    let nl_handle_clone = netlink_handle.clone();
+
+    std::thread::spawn(move || {
+        net_monitor_thread(congestion_monitor, nl_handle_clone);
+    });
 
     if opts.version {
         println!(
@@ -441,7 +570,8 @@ fn main() -> Result<()> {
 
     let mut open_object = MaybeUninit::uninit();
     loop {
-        let mut sched = Scheduler::init(&opts, &mut open_object)?;
+        let mut sched = Scheduler::init(&opts, &mut open_object, congestion_score.clone())?;
+
         if !sched.run()?.should_restart() {
             break;
         }
