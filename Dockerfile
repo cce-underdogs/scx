@@ -1,9 +1,10 @@
-FROM rust:1.87-slim AS builder
+FROM rust:1.87-slim
 
 ADD https://github.com/sched-ext/scx.git /scx
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
+    git \
     libseccomp-dev \
     libc6-dev \
     libncurses5-dev \
@@ -16,6 +17,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gnupg2 \
     lsb-release \
     wget \
+    iperf3 \
+    libiperf0 \
+    iproute2 \
+    bash \
     software-properties-common \
     && curl -fsSL https://apt.llvm.org/llvm.sh | bash -s -- 20 \
     && rm -rf /var/lib/apt/lists/*
@@ -29,11 +34,4 @@ RUN rustup component add rustfmt
 
 RUN cargo build --release -p scx_rustland
 
-FROM gcr.io/distroless/cc
-
-COPY --from=builder /scx/target/release/scx_rustland /scx_rustland
-COPY --from=builder /usr/lib/aarch64-linux-gnu/libelf.so.1 /usr/lib/libelf.so.1
-COPY --from=builder /usr/lib/aarch64-linux-gnu/libz.so.1 /usr/lib/libz.so.1
-COPY --from=builder /usr/lib/aarch64-linux-gnu/libseccomp.so.2 /usr/lib/libseccomp.so.2
-
-CMD ["/scx_rustland"]
+CMD ["/bin/bash"]
