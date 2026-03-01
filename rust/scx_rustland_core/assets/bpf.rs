@@ -11,6 +11,7 @@ use crate::bpf_skel::*;
 
 use std::ffi::c_int;
 use std::ffi::c_ulong;
+use std::ffi::CStr;
 
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
@@ -93,14 +94,11 @@ impl QueuedTask {
     /// Convert the task's comm field (C char array) into a Rust String.
     #[allow(dead_code)]
     pub fn comm_str(&self) -> String {
-        let bytes: &[u8] =
-            unsafe { std::slice::from_raw_parts(self.comm.as_ptr() as *const u8, self.comm.len()) };
+        // Convert the C char array into a Rust String
+        let c_str = unsafe { CStr::from_ptr(self.comm.as_ptr()) };
 
-        // Find the first NUL byte, or take the whole array.
-        let nul_pos = bytes.iter().position(|&c| c == 0).unwrap_or(bytes.len());
-
-        // Convert to String (handle invalid UTF-8 gracefully).
-        String::from_utf8_lossy(&bytes[..nul_pos]).into_owned()
+        // Handle potential invalid UTF-8
+        c_str.to_string_lossy().into_owned()
     }
 }
 
