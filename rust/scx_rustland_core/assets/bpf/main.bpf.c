@@ -151,7 +151,7 @@ struct {
  * Drained by the kernel in .dispatch().
  */
 struct {
-        __uint(type, BPF_MAP_TYPE_USER_RINGBUF);
+	__uint(type, BPF_MAP_TYPE_USER_RINGBUF);
 	__uint(max_entries, MAX_ENQUEUED_TASKS *
 				sizeof(struct dispatched_task_ctx));
 } dispatched SEC(".maps");
@@ -250,7 +250,7 @@ static inline bool is_kthread(const struct task_struct *p)
  */
 static inline bool is_kswapd(const struct task_struct *p)
 {
-        return p->flags & (PF_KSWAPD | PF_KCOMPACTD);
+	return p->flags & (PF_KSWAPD | PF_KCOMPACTD);
 }
 
 /*
@@ -345,8 +345,8 @@ static u64 cpu_to_dsq(s32 cpu)
  */
 static inline bool cpus_share_cache(s32 this_cpu, s32 that_cpu)
 {
-        if (this_cpu == that_cpu)
-                return true;
+	if (this_cpu == that_cpu)
+		return true;
 
 	return cpu_llc_id(this_cpu) == cpu_llc_id(that_cpu);
 }
@@ -356,8 +356,8 @@ static inline bool cpus_share_cache(s32 this_cpu, s32 that_cpu)
  */
 static inline bool is_cpu_faster(s32 this_cpu, s32 that_cpu)
 {
-        if (this_cpu == that_cpu)
-                return false;
+	if (this_cpu == that_cpu)
+		return false;
 
 	return cpu_priority(this_cpu) > cpu_priority(that_cpu);
 }
@@ -368,14 +368,14 @@ static inline bool is_cpu_faster(s32 this_cpu, s32 that_cpu)
 static inline bool is_smt_idle(s32 cpu)
 {
 	const struct cpumask *idle_smtmask;
-        bool is_idle;
+	bool is_idle;
 
 	if (!smt_enabled)
 		return true;
 
 	idle_smtmask = scx_bpf_get_idle_smtmask();
-        is_idle = bpf_cpumask_test_cpu(cpu, idle_smtmask);
-        scx_bpf_put_cpumask(idle_smtmask);
+	is_idle = bpf_cpumask_test_cpu(cpu, idle_smtmask);
+	scx_bpf_put_cpumask(idle_smtmask);
 
 	return is_idle;
 }
@@ -504,6 +504,7 @@ static void dispatch_task(const struct dispatched_task_ctx *task)
 	if (task->cpu == RL_CPU_ANY) {
 		scx_bpf_dsq_insert_vtime(p, SHARED_DSQ,
 					 task->slice_ns, task->vtime, task->flags);
+		__sync_fetch_and_add(&nr_user_dispatches, 1);
 		kick_task_cpu(p, prev_cpu);
 		goto out_release;
 	}
@@ -516,12 +517,9 @@ static void dispatch_task(const struct dispatched_task_ctx *task)
 	 * constraints), keep the task on the previously used CPU,
 	 * overriding the user-space scheduler decision.
 	 */
-	if (!bpf_cpumask_test_cpu(task->cpu, p->cpus_ptr)) {
+	bool bounce = !bpf_cpumask_test_cpu(task->cpu, p->cpus_ptr);
+	if (bounce)
 		cpu = prev_cpu;
-		__sync_fetch_and_add(&nr_bounce_dispatches, 1);
-	} else {
-		__sync_fetch_and_add(&nr_user_dispatches, 1);
-	}
 	scx_bpf_dsq_insert_vtime(p, cpu_to_dsq(cpu),
 				 task->slice_ns, task->vtime, task->flags);
 
@@ -539,8 +537,12 @@ static void dispatch_task(const struct dispatched_task_ctx *task)
 	}
 
 	/*
-	 * CPU selected by the user-space scheduler is valid, kick it.
+	 * Update dispatch statistics and kick the target CPU.
 	 */
+	if (bounce)
+		__sync_fetch_and_add(&nr_bounce_dispatches, 1);
+	else
+		__sync_fetch_and_add(&nr_user_dispatches, 1);
 	scx_bpf_kick_cpu(cpu, SCX_KICK_IDLE);
 
 out_release:
@@ -855,7 +857,7 @@ void BPF_STRUCT_OPS(rustland_dispatch, s32 cpu, struct task_struct *prev)
 	 */
 	s32 ret = bpf_user_ringbuf_drain(&dispatched,
 					 handle_dispatched_task, NULL, BPF_RB_NO_WAKEUP);
-	if (ret)
+	if (ret < 0)
 		dbg_msg("User ringbuf drain error: %d", ret);
 
 	/*
