@@ -204,6 +204,7 @@ fn set_ctrlc_handler(shutdown: Arc<AtomicBool>) -> Result<(), anyhow::Error> {
 }
 
 impl<'cb> BpfScheduler<'cb> {
+    #[allow(clippy::too_many_arguments)]
     pub fn init(
         open_object: &'cb mut MaybeUninit<OpenObject>,
         open_opts: Option<bpf_object_open_opts>,
@@ -553,7 +554,7 @@ impl<'cb> BpfScheduler<'cb> {
             vtime,
             enq_cnt,
             ..
-        } = &mut dispatched_task.as_mut();
+        } = dispatched_task;
 
         *pid = task.pid;
         *cpu = task.cpu;
