@@ -855,7 +855,7 @@ void BPF_STRUCT_OPS(rustland_dispatch, s32 cpu, struct task_struct *prev)
 	 */
 	s32 ret = bpf_user_ringbuf_drain(&dispatched,
 					 handle_dispatched_task, NULL, BPF_RB_NO_WAKEUP);
-	if (ret)
+	if (ret < 0)
 		dbg_msg("User ringbuf drain error: %d", ret);
 
 	/*
