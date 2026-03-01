@@ -663,7 +663,7 @@ static void get_task_info(struct queued_task_ctx *task,
 	task->vtime = p->scx.dsq_vtime;
 	task->enq_cnt = ++tctx->enq_cnt;
 
-	bpf_core_read(&task->comm, sizeof(task->comm), &p->comm);
+	bpf_core_read_str(&task->comm, sizeof(task->comm), &p->comm);
 }
 
 /*
