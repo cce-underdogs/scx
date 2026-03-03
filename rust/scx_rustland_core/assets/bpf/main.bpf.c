@@ -151,7 +151,7 @@ struct {
  * Drained by the kernel in .dispatch().
  */
 struct {
-        __uint(type, BPF_MAP_TYPE_USER_RINGBUF);
+    __uint(type, BPF_MAP_TYPE_USER_RINGBUF);
 	__uint(max_entries, MAX_ENQUEUED_TASKS *
 				sizeof(struct dispatched_task_ctx));
 } dispatched SEC(".maps");
@@ -250,7 +250,7 @@ static inline bool is_kthread(const struct task_struct *p)
  */
 static inline bool is_kswapd(const struct task_struct *p)
 {
-        return p->flags & (PF_KSWAPD | PF_KCOMPACTD);
+	return p->flags & (PF_KSWAPD | PF_KCOMPACTD);
 }
 
 /*
@@ -345,8 +345,8 @@ static u64 cpu_to_dsq(s32 cpu)
  */
 static inline bool cpus_share_cache(s32 this_cpu, s32 that_cpu)
 {
-        if (this_cpu == that_cpu)
-                return true;
+	if (this_cpu == that_cpu)
+			return true;
 
 	return cpu_llc_id(this_cpu) == cpu_llc_id(that_cpu);
 }
@@ -356,8 +356,8 @@ static inline bool cpus_share_cache(s32 this_cpu, s32 that_cpu)
  */
 static inline bool is_cpu_faster(s32 this_cpu, s32 that_cpu)
 {
-        if (this_cpu == that_cpu)
-                return false;
+	if (this_cpu == that_cpu)
+			return false;
 
 	return cpu_priority(this_cpu) > cpu_priority(that_cpu);
 }
