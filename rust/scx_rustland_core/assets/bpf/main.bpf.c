@@ -664,6 +664,21 @@ static void get_task_info(struct queued_task_ctx *task,
 	task->enq_cnt = ++tctx->enq_cnt;
 
 	bpf_core_read_str(&task->comm, sizeof(task->comm), &p->comm);
+
+	task->tgid = p->tgid;
+
+	/*
+	 * Expose the task's preferred NUMA node when available.
+	 *
+	 * Use BPF CO-RE to safely check for the field's existence so the
+	 * scheduler compiles correctly on kernels built without NUMA support
+	 * (CONFIG_NUMA not set), where numa_preferred_nid is absent from
+	 * struct task_struct.
+	 */
+	if (bpf_core_field_exists(p->numa_preferred_nid))
+		task->numa_node = p->numa_preferred_nid;
+	else
+		task->numa_node = -1;
 }
 
 /*

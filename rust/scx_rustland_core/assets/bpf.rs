@@ -88,6 +88,8 @@ pub struct QueuedTask {
     pub vtime: u64,           // Current task vruntime / deadline (set by the scheduler)
     pub enq_cnt: u64,
     pub comm: [c_char; TASK_COMM_LEN], // Task's executable name
+    pub tgid: i32,            // Thread group ID (process ID) for grouping threads
+    pub numa_node: i32,       // Preferred NUMA node (-1 if not set / NUMA disabled)
 }
 
 impl QueuedTask {
@@ -146,11 +148,17 @@ struct EnqueuedMessage {
     inner: bpf_intf::queued_task_ctx,
 }
 
+// SAFETY: queued_task_ctx is a plain C struct with no pointers or padding traps;
+// it is safe to interpret any correctly-sized, BPF-produced byte slice as one.
+unsafe impl plain::Plain for bpf_intf::queued_task_ctx {}
+
 impl EnqueuedMessage {
     fn from_bytes(bytes: &[u8]) -> Self {
-        let queued_task_struct = unsafe { *(bytes.as_ptr() as *const bpf_intf::queued_task_ctx) };
+        let queued_task_struct =
+            plain::from_bytes::<bpf_intf::queued_task_ctx>(bytes)
+                .expect("failed to interpret ring-buffer bytes as queued_task_ctx");
         EnqueuedMessage {
-            inner: queued_task_struct,
+            inner: *queued_task_struct,
         }
     }
 
@@ -167,6 +175,8 @@ impl EnqueuedMessage {
             vtime: self.inner.vtime,
             enq_cnt: self.inner.enq_cnt,
             comm: self.inner.comm,
+            tgid: self.inner.tgid,
+            numa_node: self.inner.numa_node,
         }
     }
 }
@@ -181,9 +191,14 @@ pub struct BpfScheduler<'cb> {
 
 // Buffer to store a task read from the ring buffer.
 //
+// The ring buffer contains raw bpf_intf::queued_task_ctx structs produced by the BPF program.
+// Sizing the buffer on the BPF-side type (not the higher-level QueuedTask) guarantees that
+// copy_from_slice() and plain::from_bytes() always operate on a correctly-sized region,
+// even if the two representations ever diverge during development.
+//
 // NOTE: make the buffer aligned to 64-bits to prevent misaligned dereferences when accessing the
 // buffer using a pointer.
-const BUFSIZE: usize = std::mem::size_of::<QueuedTask>();
+const BUFSIZE: usize = std::mem::size_of::<bpf_intf::queued_task_ctx>();
 
 #[repr(align(8))]
 struct AlignedBuffer([u8; BUFSIZE]);

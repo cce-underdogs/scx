@@ -95,6 +95,8 @@ struct queued_task_ctx {
 	u64 vtime; /* Current task's vruntime */
 	u64 enq_cnt;
 	char comm[TASK_COMM_LEN]; /* Task's executable name */
+	s32 tgid; /* Thread group ID (process ID) for grouping threads */
+	s32 numa_node; /* Preferred NUMA node (-1 if not set / NUMA disabled) */
 };
 
 /*
