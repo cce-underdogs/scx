@@ -516,12 +516,8 @@ static void dispatch_task(const struct dispatched_task_ctx *task)
 	 * constraints), keep the task on the previously used CPU,
 	 * overriding the user-space scheduler decision.
 	 */
-	if (!bpf_cpumask_test_cpu(task->cpu, p->cpus_ptr)) {
+	if (!bpf_cpumask_test_cpu(task->cpu, p->cpus_ptr))
 		cpu = prev_cpu;
-		__sync_fetch_and_add(&nr_bounce_dispatches, 1);
-	} else {
-		__sync_fetch_and_add(&nr_user_dispatches, 1);
-	}
 	scx_bpf_dsq_insert_vtime(p, cpu_to_dsq(cpu),
 				 task->slice_ns, task->vtime, task->flags);
 
@@ -530,6 +526,11 @@ static void dispatch_task(const struct dispatched_task_ctx *task)
 	 * scheduler, this dispatch can be ignored.
 	 *
 	 * Another enqueue event for the same task will be received later.
+	 *
+	 * NOTE: increment dispatch-type counters only here, after the stale
+	 * check, so that a cancelled task is counted exclusively in
+	 * nr_cancel_dispatches and not simultaneously in nr_user_dispatches
+	 * or nr_bounce_dispatches.
 	 */
 	tctx = try_lookup_task_ctx(p);
 	if (!tctx || tctx->enq_cnt > task->enq_cnt) {
@@ -537,6 +538,11 @@ static void dispatch_task(const struct dispatched_task_ctx *task)
 		__sync_fetch_and_add(&nr_cancel_dispatches, 1);
 		goto out_release;
 	}
+
+	if (cpu != task->cpu)
+		__sync_fetch_and_add(&nr_bounce_dispatches, 1);
+	else
+		__sync_fetch_and_add(&nr_user_dispatches, 1);
 
 	/*
 	 * CPU selected by the user-space scheduler is valid, kick it.
@@ -870,7 +876,7 @@ void BPF_STRUCT_OPS(rustland_dispatch, s32 cpu, struct task_struct *prev)
 	 */
 	s32 ret = bpf_user_ringbuf_drain(&dispatched,
 					 handle_dispatched_task, NULL, BPF_RB_NO_WAKEUP);
-	if (ret)
+	if (ret < 0)
 		dbg_msg("User ringbuf drain error: %d", ret);
 
 	/*
