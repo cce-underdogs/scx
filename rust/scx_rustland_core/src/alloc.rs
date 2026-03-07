@@ -456,7 +456,7 @@ impl UserAllocator {
         }
     }
 
-    // Enable a seccomp filter that sends a SIGSYS when mmap() is called.
+    // Enable a seccomp filter that returns EPERM when mmap() is called.
     #[allow(static_mut_refs)]
     pub fn disable_mmap(&self) -> Result<(), Box<dyn std::error::Error>> {
         let mut ctx = seccomp::Context::default(Action::Allow)?;
