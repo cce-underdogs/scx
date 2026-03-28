@@ -4,6 +4,7 @@
  */
 #include <scx/common.bpf.h>
 #include <scx/percpu.bpf.h>
+#include "lib/pelt.bpf.c"
 #include "intf.h"
 
 /*
@@ -95,6 +96,12 @@ const volatile bool local_pcpu = true;
  * performance level and will be ignored.
  */
 volatile s64 cpufreq_perf_lvl;
+
+/*
+ * PELT half-life shift factor: 0 = 32ms (standard), 1 = 16ms, 2 = 8ms.
+ * See lib/pelt.h for details.
+ */
+const volatile u32 pelt_lshift;
 
 /*
  * Enable preferred cores prioritization.
@@ -203,6 +210,7 @@ struct cpu_ctx {
 	struct bpf_cpumask __kptr *smt;
 	struct bpf_cpumask __kptr *l2_cpumask;
 	struct bpf_cpumask __kptr *l3_cpumask;
+	struct pelt_rq pelt;
 };
 
 struct {
@@ -1035,6 +1043,7 @@ static void update_cpu_load(struct task_struct *p, struct task_ctx *tctx)
 void BPF_STRUCT_OPS(bpfland_running, struct task_struct *p)
 {
 	struct task_ctx *tctx;
+	struct cpu_ctx *cctx;
 
 	__sync_fetch_and_add(&nr_running, 1);
 
@@ -1047,6 +1056,15 @@ void BPF_STRUCT_OPS(bpfland_running, struct task_struct *p)
 	 * the used time slice).
 	 */
 	tctx->last_run_at = bpf_ktime_get_ns();
+
+	/*
+	 * Update per-CPU PELT utilization.
+	 */
+	cctx = try_lookup_cpu_ctx(scx_bpf_task_cpu(p));
+	if (cctx) {
+		cctx->pelt.lshift = pelt_lshift;
+		pelt_update(&cctx->pelt, tctx->last_run_at, 1, 1, 1);
+	}
 
 	/*
 	 * Adjust target CPU frequency before the task starts to run.
@@ -1103,6 +1121,11 @@ void BPF_STRUCT_OPS(bpfland_stopping, struct task_struct *p, bool runnable)
 		return;
 	delta_runtime = now - cctx->last_running;
 	cctx->tot_runtime += delta_runtime;
+
+	/*
+	 * Update per-CPU PELT utilization.
+	 */
+	pelt_update(&cctx->pelt, now, 1, runnable ? 1 : 0, 0);
 }
 
 void BPF_STRUCT_OPS(bpfland_runnable, struct task_struct *p, u64 enq_flags)

@@ -247,6 +247,10 @@ struct Opts {
     #[clap(long)]
     help_stats: bool,
 
+    /// PELT half-life shift factor (0 = 32ms standard, 1 = 16ms, 2 = 8ms).
+    #[clap(long, default_value = "0")]
+    pelt_lshift: u32,
+
     #[clap(flatten, next_help_heading = "Libbpf Options")]
     pub libbpf: LibbpfOpts,
 }
@@ -344,6 +348,7 @@ impl<'a> Scheduler<'a> {
         rodata.slice_lag = opts.slice_us_lag * 1000;
         rodata.throttle_ns = opts.throttle_us * 1000;
         rodata.primary_all = domain.weight() == *NR_CPU_IDS;
+        rodata.pelt_lshift = opts.pelt_lshift;
 
         // Generate the list of available CPUs sorted by capacity in descending order.
         let mut cpus: Vec<_> = topo.all_cpus.values().collect();
